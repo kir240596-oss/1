@@ -10,3 +10,7 @@ python yadisk_download.py "https://disk.yandex.ru/d/ВАША_ССЫЛКА" -o ./
 - `--list` — только показать файлы и общий размер.
 - Скрипт можно прерывать и запускать снова: готовые файлы пропускаются, недокачанные докачиваются.
 - Неудавшиеся файлы пишутся в `_failed.txt`.
+
+## Быстрый запуск
+- Windows: положите `run_windows.bat` и `yadisk_download.py` в одну папку и дважды кликните `run_windows.bat`.
+- Mac/Linux: `./run_mac_linux.sh`
