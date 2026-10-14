@@ -21,7 +21,7 @@ import time
 import requests
 
 API = "https://cloud-api.yandex.net/v1/disk/public/resources"
-PAGE = 200
+PAGE = 40
 session = requests.Session()
 
 
@@ -29,7 +29,7 @@ def api_get(url, params, retries=6):
     """GET к API с повторами и ожиданием при 429/5xx."""
     for attempt in range(retries):
         try:
-            r = session.get(url, params=params, timeout=60)
+            r = session.get(url, params=params, timeout=(15, 180))
             if r.status_code == 200:
                 return r.json()
             if r.status_code in (429, 500, 502, 503, 504):
@@ -48,11 +48,14 @@ def api_get(url, params, retries=6):
 def walk(public_key, path):
     """Генератор (относительный_путь_в_папке, item) для всех файлов рекурсивно."""
     offset = 0
+    print(f"  читаю папку {path} ...", flush=True)
     while True:
         data = api_get(API, {"public_key": public_key, "path": path,
                              "limit": PAGE, "offset": offset})
         emb = data.get("_embedded", {})
         items = emb.get("items", [])
+        if offset:
+            print(f"    {path}: прочитано {offset + len(items)}", flush=True)
         for it in items:
             if it["type"] == "dir":
                 yield from walk(public_key, it["path"])
