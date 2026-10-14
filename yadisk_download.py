@@ -14,6 +14,7 @@
   python yadisk_download.py "https://disk.yandex.ru/d/XXXXXXXX" --list
 """
 import argparse
+import json
 import os
 import sys
 import time
@@ -25,7 +26,7 @@ PAGE = 40
 session = requests.Session()
 
 
-def api_get(url, params, retries=6):
+def api_get(url, params, retries=40):
     """GET к API с повторами и ожиданием при 429/5xx."""
     for attempt in range(retries):
         try:
@@ -125,7 +126,16 @@ def main():
     root = api_get(API, {"public_key": a.url, "path": base, "limit": 1})
     print(f"Папка: {root.get('name')}")
 
-    files = list(walk(a.url, base))
+    os.makedirs(a.out, exist_ok=True)
+    cache = os.path.join(a.out, "_list.json")
+    if os.path.exists(cache):
+        with open(cache, encoding="utf-8") as fh:
+            files = json.load(fh)
+        print(f"Список файлов взят из кэша {cache} (удалите его, чтобы перечитать)")
+    else:
+        files = list(walk(a.url, base))
+        with open(cache, "w", encoding="utf-8") as fh:
+            json.dump(files, fh, ensure_ascii=False)
     total = sum(f.get("size", 0) for f in files)
     print(f"Найдено файлов: {len(files)}, ~{total / 1024**3:.2f} ГБ")
     if a.list:
