@@ -177,6 +177,8 @@ def run_ui(urls, st, args):
                 break
             try:
                 print(f"...   {url}: проверка URL")
+                # чистая страница: иначе находится кнопка от предыдущего URL и клик срывается
+                page.goto(f"https://search.google.com/search-console?resource_id={args.property}")
                 box = page.get_by_role("combobox").first
                 box.click()
                 box.fill(url)
