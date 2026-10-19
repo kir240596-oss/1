@@ -15,7 +15,7 @@ import json
 import re
 import sys
 import time
-from datetime import date
+from datetime import date, datetime
 from pathlib import Path
 
 HERE = Path(__file__).parent
@@ -23,10 +23,16 @@ STATE = HERE / "state.json"
 
 
 def load_urls(path):
+    if Path(path).suffix.lower() in (".xlsx", ".xlsm"):
+        import openpyxl
+        ws = openpyxl.load_workbook(path, read_only=True).active
+        lines = [str(r[0]) for r in ws.iter_rows(values_only=True) if r and r[0]]
+    else:
+        lines = Path(path).read_text(encoding="utf-8").splitlines()
     urls = []
-    for line in Path(path).read_text(encoding="utf-8").splitlines():
+    for line in lines:
         line = line.strip()
-        if line and not line.startswith("#"):
+        if line.startswith("http"):
             urls.append(line)
     return list(dict.fromkeys(urls))  # без дублей, порядок сохраняем
 
@@ -95,12 +101,20 @@ def run_ui(urls, st, args):
         )
         page = ctx.pages[0] if ctx.pages else ctx.new_page()
         page.goto(f"https://search.google.com/search-console?resource_id={args.property}")
+        if "accounts.google" in page.url and args.headless:
+            print("Сессия Google не авторизована. Один раз запустите без --headless и войдите в аккаунт.")
+            ctx.close()
+            return
         if "accounts.google" in page.url:
             input("Войдите в аккаунт Google в открытом окне, затем нажмите Enter здесь... ")
             page.goto(f"https://search.google.com/search-console?resource_id={args.property}")
+        fails = 0
         for url in urls:
-            if sent_today(st, "ui") >= args.limit:
-                print(f"Достигнут дневной лимит {args.limit}, остановка.")
+            if args.limit and sent_today(st, "ui") >= args.limit:
+                print(f"Достигнут локальный лимит {args.limit}, остановка.")
+                break
+            if fails >= 3:
+                print("3 ошибки подряд — похоже, не работает вход/интерфейс, остановка до следующей попытки.")
                 break
             try:
                 box = page.get_by_role("combobox").first
@@ -114,6 +128,7 @@ def run_ui(urls, st, args):
                 if page.get_by_text(TXT_QUOTA).count():
                     print("Квота ресурса исчерпана, остановка.")
                     break
+                fails = 0
                 print(f"OK    {url}")
                 st["done"][url] = {"mode": "ui", "date": date.today().isoformat()}
                 st["failed"].pop(url, None)
@@ -125,6 +140,7 @@ def run_ui(urls, st, args):
             except Exception as e:  # noqa: BLE001
                 print(f"FAIL  {url} — {type(e).__name__}: {str(e)[:150]}")
                 st["failed"][url] = type(e).__name__
+                fails += 1
                 page.goto(f"https://search.google.com/search-console?resource_id={args.property}")
             save_state(st)
             time.sleep(args.delay)
@@ -133,33 +149,47 @@ def run_ui(urls, st, args):
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("urls_file", help="txt-файл: один URL на строку (# — комментарий)")
+    ap.add_argument("urls_file", help="xlsx (URL в 1-й колонке) или txt: один URL на строку")
     ap.add_argument("--mode", choices=["api", "ui"], default="ui")
     ap.add_argument("--credentials", default=str(HERE / "service_account.json"), help="[api] JSON сервисного аккаунта")
     ap.add_argument("--property", help="[ui] ресурс GSC: sc-domain:site.ru или https://site.ru/ (префикс URL)")
     ap.add_argument("--headless", action="store_true", help="[ui] без окна (после первого входа)")
     ap.add_argument("--channel", default="", help="[ui] 'chrome' — использовать установленный Chrome")
-    ap.add_argument("--limit", type=int, help="макс. URL за сутки (api: 200, ui: 10)")
+    ap.add_argument("--limit", type=int, help="макс. URL за сутки (api: 200, ui: 0 = без локального лимита)")
     ap.add_argument("--delay", type=float, help="пауза между URL, сек (api: 1, ui: 5)")
-    ap.add_argument("--retry-failed", action="store_true", help="повторить URL из failed")
+    ap.add_argument("--loop", action="store_true", help="работать, пока не пройдут все URL; при остановке (лимит/ошибка) ждать --wait часов и повторять")
+    ap.add_argument("--wait", type=float, default=4, help="пауза между попытками в --loop, часов (по умолчанию 4)")
     ap.add_argument("--force", action="store_true", help="игнорировать state.json и слать всё заново")
     args = ap.parse_args()
 
-    args.limit = args.limit or (200 if args.mode == "api" else 10)
+    if args.limit is None:
+        args.limit = 200 if args.mode == "api" else 0  # ui: лимит определяет сам Google (сообщение о квоте)
     args.delay = args.delay if args.delay is not None else (1 if args.mode == "api" else 5)
     if args.mode == "ui" and not args.property:
         sys.exit("Для --mode ui укажите --property")
 
-    st = load_state()
-    urls = load_urls(args.urls_file)
-    if not args.force:
-        urls = [u for u in urls if u not in st["done"]]
-    print(f"К отправке: {len(urls)} URL, режим {args.mode}, лимит/сутки {args.limit}")
-    (run_api if args.mode == "api" else run_ui)(urls, st, args)
-    left = [u for u in load_urls(args.urls_file) if u not in st["done"]]
-    print(f"Итого отправлено: {len(st['done'])}, осталось: {len(left)}, ошибок: {len(st['failed'])}")
-    if left:
-        print("Запустите скрипт завтра — он продолжит с места остановки.")
+    all_urls = load_urls(args.urls_file)
+    while True:
+        st = load_state()
+        urls = all_urls if args.force else [u for u in all_urls if u not in st["done"]]
+        args.force = False
+        print(f"[{datetime.now():%Y-%m-%d %H:%M}] К отправке: {len(urls)} URL, режим {args.mode}")
+        try:
+            (run_api if args.mode == "api" else run_ui)(urls, st, args)
+        except Exception as e:  # noqa: BLE001
+            print(f"Ошибка запуска: {type(e).__name__}: {e}")
+        st = load_state()
+        left = [u for u in all_urls if u not in st["done"]]
+        print(f"Отправлено: {len(st['done'])}, осталось: {len(left)}, ошибок: {len(st['failed'])}")
+        if not left:
+            print("Все URL из списка обработаны.")
+            break
+        if not args.loop:
+            print("Запустите скрипт снова (или используйте --loop) — продолжит с места остановки.")
+            break
+        nxt = datetime.fromtimestamp(time.time() + args.wait * 3600)
+        print(f"Следующая попытка в {nxt:%Y-%m-%d %H:%M} (через {args.wait} ч). Не закрывайте окно.")
+        time.sleep(args.wait * 3600)
 
 
 if __name__ == "__main__":
