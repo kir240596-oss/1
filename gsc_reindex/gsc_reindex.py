@@ -22,8 +22,20 @@ HERE = Path(__file__).parent
 STATE = HERE / "state.json"
 
 
+def ensure(module, package=None):
+    """Ставит библиотеку, если её нет (на случай сорвавшейся установки)."""
+    import importlib
+    import subprocess
+    try:
+        importlib.import_module(module)
+    except ImportError:
+        print(f"Устанавливаю {package or module}...")
+        subprocess.check_call([sys.executable, "-m", "pip", "install", package or module])
+
+
 def load_urls(path):
     if Path(path).suffix.lower() in (".xlsx", ".xlsm"):
+        ensure("openpyxl")
         import openpyxl
         ws = openpyxl.load_workbook(path, read_only=True).active
         lines = [str(r[0]) for r in ws.iter_rows(values_only=True) if r and r[0]]
@@ -54,6 +66,8 @@ def sent_today(st, mode):
 
 # ---------- режим api ----------
 def run_api(urls, st, args):
+    ensure("google.auth", "google-auth")
+    ensure("requests")
     from google.oauth2 import service_account
     from google.auth.transport.requests import AuthorizedSession
 
@@ -91,6 +105,7 @@ TXT_ALREADY = re.compile(r"уже в очереди|already.*(requested|queue)",
 
 
 def run_ui(urls, st, args):
+    ensure("playwright")
     from playwright.sync_api import sync_playwright
 
     profile = HERE / ".browser_profile"
