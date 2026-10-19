@@ -1,0 +1,3 @@
+# один URL на строку
+https://example.com/page-1/
+https://example.com/page-2/
