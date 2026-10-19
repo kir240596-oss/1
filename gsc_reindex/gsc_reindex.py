@@ -99,8 +99,8 @@ def run_api(urls, st, args):
 
 # ---------- режим ui ----------
 BTN_REQUEST = re.compile(r"Запросить индексирование|Request indexing", re.I)
-TXT_DONE = re.compile(r"Индексирование запрошено|Indexing requested", re.I)
-TXT_QUOTA = re.compile(r"Превышена квота|Quota exceeded", re.I)
+TXT_DONE = re.compile(r"Отправлен запрос на индексирование|Индексирование запрошено|Indexing request(ed| submitted)", re.I)
+TXT_QUOTA = re.compile(r"квот|Quota exceeded", re.I)
 TXT_ALREADY = re.compile(r"уже в очереди|already.*(requested|queue)", re.I)
 
 
