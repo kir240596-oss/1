@@ -99,8 +99,9 @@ def run_api(urls, st, args):
 
 # ---------- режим ui ----------
 BTN_REQUEST = re.compile(r"Запросить индексирование|Request indexing", re.I)
-TXT_DONE = re.compile(r"Отправлен запрос на индексирование|Индексирование запрошено|Indexing request(ed| submitted)", re.I)
-TXT_QUOTA = re.compile(r"квот|Quota exceeded", re.I)
+BTN_CLOSE = re.compile(r"^(Закрыть|Close|Понятно|Got it)$", re.I)
+TXT_DONE = re.compile(r"Отправлен\s+запрос\s+на\s+индексирование|Индексирование\s+запрошено|Indexing\s+request(ed|\s+submitted)", re.I)
+TXT_QUOTA = re.compile(r"Превышена\s+квота|квота.{0,40}(исчерпана|превышена)|Quota\s+exceeded", re.I)
 TXT_ALREADY = re.compile(r"уже в очереди|already.*(requested|queue)", re.I)
 
 
@@ -175,28 +176,37 @@ def run_ui(urls, st, args):
                 print("3 ошибки подряд — похоже, не работает вход/интерфейс, остановка до следующей попытки.")
                 break
             try:
+                print(f"...   {url}: проверка URL")
                 box = page.get_by_role("combobox").first
                 box.click()
                 box.fill(url)
                 box.press("Enter")
                 btn = page.get_by_role("button", name=BTN_REQUEST).first
                 btn.wait_for(timeout=120_000)  # проверка «живого» URL занимает до пары минут
+                print(f"...   {url}: запрос индексирования")
                 btn.click()
-                page.get_by_text(TXT_DONE).or_(page.get_by_text(TXT_QUOTA)).first.wait_for(timeout=180_000)
-                if page.get_by_text(TXT_QUOTA).count():
+                close = page.get_by_role("button", name=BTN_CLOSE).first
+                close.wait_for(timeout=180_000)  # окно результата (успех или квота)
+                body = page.locator("body").inner_text()
+                if TXT_DONE.search(body):
+                    pass
+                elif TXT_QUOTA.search(body):
                     print("Квота ресурса исчерпана, остановка.")
+                    close.click()
                     break
+                else:
+                    raise RuntimeError("неизвестный ответ: " + re.sub(r"\s+", " ", body)[-200:])
                 fails = 0
                 print(f"OK    {url}")
                 st["done"][url] = {"mode": "ui", "date": date.today().isoformat()}
                 st["failed"].pop(url, None)
-                for close in (r"Закрыть|Close", r"Понятно|Got it|OK"):
-                    b = page.get_by_role("button", name=re.compile(close, re.I))
-                    if b.count():
-                        b.first.click()
-                        break
+                close.click()
             except Exception as e:  # noqa: BLE001
-                print(f"FAIL  {url} — {type(e).__name__}: {str(e)[:150]}")
+                print(f"FAIL  {url} — {type(e).__name__}: {str(e)[:300]}")
+                try:
+                    page.screenshot(path=str(HERE / "debug_last_error.png"))
+                except Exception:  # noqa: BLE001
+                    pass
                 st["failed"][url] = type(e).__name__
                 fails += 1
                 page.goto(f"https://search.google.com/search-console?resource_id={args.property}")
