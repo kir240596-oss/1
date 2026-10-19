@@ -104,24 +104,67 @@ TXT_QUOTA = re.compile(r"Превышена квота|Quota exceeded", re.I)
 TXT_ALREADY = re.compile(r"уже в очереди|already.*(requested|queue)", re.I)
 
 
+def chrome_exe():
+    import os
+    import shutil
+    cands = [
+        os.path.expandvars(r"%ProgramFiles%\Google\Chrome\Application\chrome.exe"),
+        os.path.expandvars(r"%ProgramFiles(x86)%\Google\Chrome\Application\chrome.exe"),
+        os.path.expandvars(r"%LocalAppData%\Google\Chrome\Application\chrome.exe"),
+        "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+        shutil.which("google-chrome") or "", shutil.which("chromium") or "",
+    ]
+    for c in cands:
+        if c and Path(c).exists():
+            return c
+    sys.exit("Chrome не найден. Установите Google Chrome.")
+
+
+def connect_real_chrome(p, port=9222):
+    """Запускает обычный Chrome (без флагов автоматизации — Google пускает войти) и подключается к нему."""
+    import subprocess
+    url = f"http://localhost:{port}"
+    try:
+        return p.chromium.connect_over_cdp(url)
+    except Exception:  # noqa: BLE001
+        pass
+    subprocess.Popen([
+        chrome_exe(), f"--remote-debugging-port={port}",
+        f"--user-data-dir={HERE / 'chrome_profile'}", "--no-first-run",
+        "https://search.google.com/search-console",
+    ])
+    for _ in range(30):
+        time.sleep(1)
+        try:
+            return p.chromium.connect_over_cdp(url)
+        except Exception:  # noqa: BLE001
+            continue
+    raise RuntimeError("Не удалось подключиться к Chrome")
+
+
 def run_ui(urls, st, args):
     ensure("playwright")
     from playwright.sync_api import sync_playwright
 
     profile = HERE / ".browser_profile"
     with sync_playwright() as p:
-        ctx = p.chromium.launch_persistent_context(
-            str(profile), headless=args.headless, channel=args.channel or None,
-            args=["--disable-blink-features=AutomationControlled"], viewport={"width": 1400, "height": 900},
-        )
-        page = ctx.pages[0] if ctx.pages else ctx.new_page()
+        if args.real_chrome:
+            browser = connect_real_chrome(p)
+            ctx = browser.contexts[0]
+            page = ctx.new_page()
+        else:
+            ctx = p.chromium.launch_persistent_context(
+                str(profile), headless=args.headless, channel=args.channel or None,
+                args=["--disable-blink-features=AutomationControlled"], viewport={"width": 1400, "height": 900},
+            )
+            page = ctx.pages[0] if ctx.pages else ctx.new_page()
         page.goto(f"https://search.google.com/search-console?resource_id={args.property}")
         if "accounts.google" in page.url and args.headless:
             print("Сессия Google не авторизована. Один раз запустите без --headless и войдите в аккаунт.")
-            ctx.close()
+            page.close() if args.real_chrome else ctx.close()
             return
         if "accounts.google" in page.url:
-            input("Войдите в аккаунт Google в открытом окне, затем нажмите Enter здесь... ")
+            input("Войдите в аккаунт Google в открытом окне Chrome, затем нажмите Enter здесь... ")
             page.goto(f"https://search.google.com/search-console?resource_id={args.property}")
         fails = 0
         for url in urls:
@@ -159,7 +202,7 @@ def run_ui(urls, st, args):
                 page.goto(f"https://search.google.com/search-console?resource_id={args.property}")
             save_state(st)
             time.sleep(args.delay)
-        ctx.close()
+        page.close() if args.real_chrome else ctx.close()
 
 
 def main():
@@ -169,6 +212,7 @@ def main():
     ap.add_argument("--credentials", default=str(HERE / "service_account.json"), help="[api] JSON сервисного аккаунта")
     ap.add_argument("--property", help="[ui] ресурс GSC: sc-domain:site.ru или https://site.ru/ (префикс URL)")
     ap.add_argument("--headless", action="store_true", help="[ui] без окна (после первого входа)")
+    ap.add_argument("--real-chrome", action="store_true", help="[ui] запустить обычный Chrome и подключиться к нему (Google пускает войти, профиль в chrome_profile/)")
     ap.add_argument("--channel", default="", help="[ui] 'chrome' — использовать установленный Chrome")
     ap.add_argument("--limit", type=int, help="макс. URL за сутки (api: 200, ui: 0 = без локального лимита)")
     ap.add_argument("--delay", type=float, help="пауза между URL, сек (api: 1, ui: 5)")
