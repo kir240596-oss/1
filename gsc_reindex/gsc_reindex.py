@@ -217,7 +217,23 @@ def run_ui(urls, st, args):
         page.close() if args.real_chrome else ctx.close()
 
 
+class Tee:
+    """Дублирует вывод консоли в log.txt, чтобы можно было посмотреть историю запусков."""
+
+    def __init__(self, stream, path):
+        self.stream, self.file = stream, open(path, "a", encoding="utf-8")
+
+    def write(self, s):
+        self.stream.write(s)
+        self.file.write(s)
+        self.file.flush()
+
+    def flush(self):
+        self.stream.flush()
+
+
 def main():
+    sys.stdout = Tee(sys.stdout, HERE / "log.txt")
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("urls_file", help="xlsx (URL в 1-й колонке) или txt: один URL на строку")
     ap.add_argument("--mode", choices=["api", "ui"], default="ui")
